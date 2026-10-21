@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ResilientPay</title>
+<style>
+  :root { --bg:#f5f7fa; --card:#fff; --ink:#14213d; --muted:#5c677d; --line:#dde3ec;
+          --brand:#0b5d4b; --ok:#0b7a43; --bad:#b3261e; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0e1621; --card:#17212e; --ink:#e8edf4; --muted:#9aa7b8; --line:#2a3646;
+            --brand:#1f8f72; --ok:#3ecf9b; --bad:#ff6b63; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font:16px/1.5 system-ui, sans-serif; background:var(--bg); color:var(--ink); }
+  main { max-width:720px; margin:0 auto; padding:24px 16px 48px; }
+  header { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:20px; }
+  h1 { font-size:1.5rem; margin:0; }
+  h2 { font-size:1.05rem; margin:0 0 12px; }
+  .status { display:flex; align-items:center; gap:8px; font-weight:600; }
+  .dot { width:12px; height:12px; border-radius:50%; background:var(--muted); }
+  .dot.ok { background:var(--ok); } .dot.bad { background:var(--bad); }
+  section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px; }
+  form { display:flex; flex-wrap:wrap; gap:8px; }
+  input, button { font:inherit; padding:8px 10px; border-radius:6px; border:1px solid var(--line);
+                  background:var(--bg); color:var(--ink); }
+  input { flex:1 1 120px; min-width:0; }
+  button { background:var(--brand); color:#fff; border-color:var(--brand); cursor:pointer; font-weight:600; }
+  button:focus-visible, input:focus-visible { outline:3px solid var(--brand); outline-offset:2px; }
+  table { width:100%; border-collapse:collapse; }
+  th, td { text-align:left; padding:8px 4px; border-bottom:1px solid var(--line); }
+  td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
+  #msg { min-height:1.5em; margin:8px 0 0; color:var(--muted); }
+  #msg.err { color:var(--bad); } #msg.good { color:var(--ok); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>ResilientPay</h1>
+    <div class="status" role="status"><span id="dot" class="dot"></span><span id="st">Checking service…</span></div>
+  </header>
+
+  <section>
+    <h2>Open an account</h2>
+    <form id="fa">
+      <input name="name" placeholder="Account holder name" required aria-label="Account holder name">
+      <input name="balance" type="number" min="0" step="0.01" value="1000" aria-label="Opening balance">
+      <button>Open account</button>
+    </form>
+  </section>
+
+  <section>
+    <h2>Send money</h2>
+    <form id="ft">
+      <input name="from_id" type="number" min="1" placeholder="From account ID" required aria-label="From account ID">
+      <input name="to_id" type="number" min="1" placeholder="To account ID" required aria-label="To account ID">
+      <input name="amount" type="number" min="0.01" step="0.01" placeholder="Amount" required aria-label="Amount">
+      <button>Send money</button>
+    </form>
+    <p id="msg" aria-live="polite"></p>
+  </section>
+
+  <section>
+    <h2>Accounts</h2>
+    <table>
+      <thead><tr><th>ID</th><th>Name</th><th class="num">Balance</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="3">No accounts yet. Open one above.</td></tr></tbody>
+    </table>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const say = (t, cls="") => { $("msg").textContent = t; $("msg").className = cls; };
+const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+async function health() {
+  try {
+    const r = await fetch("/health", {cache:"no-store"});
+    $("dot").className = "dot " + (r.ok ? "ok" : "bad");
+    $("st").textContent = r.ok ? "Service up" : "Service down";
+  } catch { $("dot").className = "dot bad"; $("st").textContent = "Service down"; }
+}
+async function load() {
+  try {
+    const list = await (await fetch("/accounts")).json();
+    if (!Array.isArray(list) || !list.length) return;
+    $("rows").innerHTML = list.map(a =>
+      `<tr><td>${a.id}</td><td>${esc(a.name)}</td><td class="num">₹${Number(a.balance).toFixed(2)}</td></tr>`).join("");
+  } catch {}
+}
+$("fa").onsubmit = async e => {
+  e.preventDefault();
+  const f = Object.fromEntries(new FormData(e.target));
+  try {
+    const r = await fetch("/accounts", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({name:f.name, balance:f.balance})});
+    say(r.ok ? "Account opened." : "Could not open the account. Check the details and try again.", r.ok ? "good" : "err");
+  } catch { say("Service is unavailable. Try again in a few seconds.", "err"); }
+  e.target.name.value = ""; load();
+};
+$("ft").onsubmit = async e => {
+  e.preventDefault();
+  const f = Object.fromEntries(new FormData(e.target));
+  const key = crypto.randomUUID();   // retry-safe: same key = no double debit
+  try {
+    const r = await fetch("/transfer", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({from_id:+f.from_id, to_id:+f.to_id, amount:f.amount, idempotency_key:key})});
+    const d = await r.json();
+    say(r.ok ? "Transfer complete." : (typeof d.detail === "string" ? d.detail : "Transfer failed."), r.ok ? "good" : "err");
+  } catch { say("Service is unavailable. Try again in a few seconds.", "err"); }
+  load();
+};
+health(); load(); setInterval(health, 2000);
+</script>
+</body>
+</html>
