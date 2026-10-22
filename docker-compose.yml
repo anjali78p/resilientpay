@@ -15,7 +15,7 @@ services:
   api:
     build: .
     container_name: resilientpay-api
-    restart: always            # chaos test me ise hata kar BASELINE TTR nikalna
+    restart: always           # chaos test me ise hata kar BASELINE TTR nikalna
     env_file: .env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
